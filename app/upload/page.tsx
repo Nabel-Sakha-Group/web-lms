@@ -230,6 +230,48 @@ export default function UploadPage() {
     fetchFiles(selectedBucket, newPath);
   };
 
+  const handleDeleteItem = async (item: FileObject) => {
+    if (!selectedBucket) return;
+
+    const isFolder = !item.metadata;
+    const targetPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+    const confirmed = window.confirm(
+      isFolder
+        ? `Hapus folder "${targetPath}" beserta semua isinya?`
+        : `Hapus file "${targetPath}"?`
+    );
+    if (!confirmed) return;
+
+    try {
+      setLoadingFiles(true);
+      const response = await fetch('/api/storage/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          bucket: selectedBucket,
+          path: targetPath,
+          type: isFolder ? 'folder' : 'file',
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        console.error('Delete error:', data.error);
+        alert(`Gagal menghapus: ${data.error || 'Unknown error'}`);
+      } else {
+        // Refresh current folder view
+        fetchFiles(selectedBucket, currentPath);
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+      alert('Terjadi kesalahan saat menghapus');
+    } finally {
+      setLoadingFiles(false);
+    }
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const fileArray = Array.from(e.target.files);
@@ -548,6 +590,16 @@ export default function UploadPage() {
                             {(file.metadata.size / 1024).toFixed(2)} KB
                           </span>
                         )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteItem(file);
+                          }}
+                          className="ml-2 text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-500/50"
+                        >
+                          Hapus
+                        </button>
                       </div>
                     </div>
                   ))}
