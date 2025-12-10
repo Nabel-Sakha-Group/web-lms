@@ -42,6 +42,8 @@ export default function UploadPage() {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [folderPickerSupported, setFolderPickerSupported] = useState<boolean>(false);
   const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
+  const [bucketUsage, setBucketUsage] = useState<{ usedBytes: number; totalBytes: number } | null>(null);
+  const [loadingUsage, setLoadingUsage] = useState(false);
 
   // Check authentication on page load
   useEffect(() => {
@@ -191,8 +193,27 @@ export default function UploadPage() {
 
   const handleBucketSelect = (bucketName: string) => {
     setSelectedBucket(bucketName);
+    setBucketUsage(null);
     setCurrentPath("");
     fetchFiles(bucketName, "");
+    fetchBucketUsage(bucketName);
+  };
+
+  const fetchBucketUsage = async (bucketName: string) => {
+    try {
+      setLoadingUsage(true);
+      const response = await fetch(`/api/storage/usage?bucket=${encodeURIComponent(bucketName)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        console.error('Error fetching usage:', data.error);
+        return;
+      }
+      setBucketUsage({ usedBytes: data.usedBytes, totalBytes: data.totalBytes });
+    } catch (err) {
+      console.error('Error fetching usage:', err);
+    } finally {
+      setLoadingUsage(false);
+    }
   };
 
   const handleFolderClick = (folderName: string) => {
@@ -365,7 +386,7 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-slate-900">
-      <div className="p-8">\n
+      <div className="p-8">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-4xl font-bold text-white mb-2">File Storage</h1>
@@ -440,19 +461,57 @@ export default function UploadPage() {
                 </button>
               )}
             </div>
-            
+
             {selectedBucket && (
-              <div className="bg-slate-800 rounded-md p-3 mb-4">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-lg">📁</span>
-                  <span className="text-gray-300 font-mono">{currentPath || '/'}</span>
-                  {currentPath && (
-                    <button
-                      onClick={handleBackClick}
-                      className="ml-auto text-blue-400 hover:text-blue-300 font-medium"
-                    >
-                      ← Back
-                    </button>
+              <div className="mb-4 space-y-2">
+                <div className="bg-slate-800 rounded-md p-3 flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-lg">📁</span>
+                    <span className="text-gray-300 font-mono">{currentPath || '/'}</span>
+                    {currentPath && (
+                      <button
+                        onClick={handleBackClick}
+                        className="ml-auto text-blue-400 hover:text-blue-300 font-medium"
+                      >
+                        ← Back
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bucket usage progress */}
+                <div className="bg-slate-800 rounded-md p-3">
+                  {bucketUsage ? (
+                    <>
+                      <div className="flex items-center justify-between text-xs text-gray-300 mb-1">
+                        <span>
+                          Used: {(bucketUsage.usedBytes / 1024 / 1024).toFixed(2)} MB
+                        </span>
+                        <span>
+                          Total: {(bucketUsage.totalBytes / 1024 / 1024).toFixed(2)} MB
+                        </span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (bucketUsage.usedBytes / Math.max(bucketUsage.totalBytes, 1)) * 100
+                            ).toFixed(1)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-1">
+                        {`Approx. ${(bucketUsage.usedBytes / Math.max(bucketUsage.totalBytes, 1) * 100).toFixed(1)}% used`}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {loadingUsage
+                        ? 'Calculating bucket usage...'
+                        : 'Select a bucket to see usage'}
+                    </div>
                   )}
                 </div>
               </div>
