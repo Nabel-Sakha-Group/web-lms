@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     async function collectPaths(prefix: string): Promise<string[]> {
       const { data: entries, error } = await supabaseAdmin.storage
-        .from(bucket)
+        .from(bucket as string)
         .list(prefix, {
           limit: 1000,
           sortBy: { column: 'name', order: 'asc' },
