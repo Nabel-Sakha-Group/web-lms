@@ -150,15 +150,13 @@ export default function UploadPage() {
   const fetchBuckets = async () => {
     try {
       setLoadingBuckets(true);
-      const response = await fetch('/api/storage/buckets');
+      const response = await fetch('/api/storage/buckets-all');
       const data = await response.json();
-      
       if (!response.ok) {
         console.error("Error fetching buckets:", data.error);
         setError(data.error);
         return;
       }
-
       if (data.buckets) {
         setBuckets(data.buckets);
       }
@@ -173,19 +171,32 @@ export default function UploadPage() {
   const fetchFiles = async (bucketName: string, path: string = "") => {
     try {
       setLoadingFiles(true);
-      const response = await fetch(`/api/storage/files?bucket=${bucketName}&path=${path}`);
+      setError("");
+      // Always use the _account property from the bucket for correct account context
+      const acct = (() => {
+        const bucket = buckets.find(b => b.name === bucketName || b.id === bucketName);
+        return bucket && '_account' in bucket ? (bucket as { _account?: string })._account || null : null;
+      })();
+      const params = acct ? `account=${encodeURIComponent(acct)}&path=${encodeURIComponent(path)}` : `bucket=${encodeURIComponent(bucketName)}&path=${encodeURIComponent(path)}`;
+      const response = await fetch(`/api/storage/files?${params}`);
       const data = await response.json();
-      
+
       if (!response.ok) {
         console.error("Error fetching files:", data.error);
+        setError(data.error || "Gagal mengambil isi bucket. Cek policy dan koneksi.");
+        setFiles([]);
         return;
       }
 
       if (data.files) {
         setFiles(data.files);
+      } else {
+        setFiles([]);
       }
     } catch (err) {
       console.error("Error:", err);
+      setError("Gagal mengambil isi bucket. Cek policy dan koneksi.");
+      setFiles([]);
     } finally {
       setLoadingFiles(false);
     }
@@ -193,10 +204,23 @@ export default function UploadPage() {
 
   const handleBucketSelect = (bucketName: string) => {
     setSelectedBucket(bucketName);
-    setBucketUsage(null);
+    setFiles([]); // Reset files state to avoid showing old files
     setCurrentPath("");
-    fetchFiles(bucketName, "");
-    fetchBucketUsage(bucketName);
+    setBucketUsage(null);
+    setUploadFiles([]);
+    setUploadProgress([]);
+    setSelectedFolderName(null);
+    // Find the _account for this bucket
+    const bucketObj = buckets.find(b => b.name === bucketName || b.id === bucketName);
+    const acct = bucketObj && '_account' in bucketObj ? (bucketObj as { _account?: string })._account || null : null;
+    // Always use correct account for fetchFiles
+    if (acct) {
+      fetchFiles(bucketName, "");
+      fetchBucketUsage(bucketName);
+    } else {
+      fetchFiles(bucketName, "");
+      fetchBucketUsage(bucketName);
+    }
   };
 
   const fetchBucketUsage = async (bucketName: string) => {
@@ -302,78 +326,58 @@ export default function UploadPage() {
       if (isFolderUpload && !baseFolder) {
         const firstPath = relativePaths.find((p) => p && p.length > 0) as string;
         baseFolder = firstPath.split('/')[0] || null;
-        // Ensure the base folder exists by uploading a .keep file
-        const folderRootPath = currentPath
-          ? `${currentPath}/${baseFolder}`
-          : baseFolder || '';
-        if (folderRootPath) {
-          const keepBlob = new Blob([""], { type: "text/plain" });
-          await supabase.storage
-            .from(selectedBucket)
-            .upload(`${folderRootPath}/.keep`, keepBlob, {
-              cacheControl: '3600',
-              upsert: false
-            })
-            .catch(() => void 0);
-        }
       }
+
+      // Find the _account for this bucket
+      const bucketObj = buckets.find(b => b.name === selectedBucket || b.id === selectedBucket);
+      const acct = bucketObj && '_account' in bucketObj ? (bucketObj as { _account?: string })._account || null : null;
 
       for (let i = 0; i < uploadFiles.length; i++) {
         const file = uploadFiles[i];
-        
-        // Update status to uploading
-        setUploadProgress(prev => prev.map((p, idx) => 
-          idx === i ? { ...p, status: 'uploading' as const } : p
-        ));
-
+        setUploadProgress(prev => prev.map((p, idx) => idx === i ? { ...p, status: 'uploading' as const } : p));
         try {
           // Build storage path preserving folder structure if available
           const relPath = (file as unknown as { webkitRelativePath?: string }).webkitRelativePath;
           let filePath: string;
           if (isFolderUpload && relPath) {
-            // relPath includes baseFolder/inner/path/file
             const pathUnderBase = baseFolder ? relPath.replace(new RegExp(`^${baseFolder}/`), '') : relPath;
             const prefix = currentPath ? `${currentPath}/${baseFolder || ''}`.replace(/\/$/, '') : (baseFolder || '');
             filePath = prefix ? `${prefix}/${pathUnderBase}` : relPath;
           } else {
             filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
           }
-          
-          const { error: uploadError } = await supabase.storage
-            .from(selectedBucket)
-            .upload(filePath, file, {
-              cacheControl: '3600',
-              upsert: false
-            });
 
-          if (uploadError) {
-            setUploadProgress(prev => prev.map((p, idx) => 
-              idx === i ? { ...p, status: 'error' as const } : p
-            ));
-            console.error(`Error uploading ${file.name}:`, uploadError);
+          const formData = new FormData();
+          formData.append('bucket', selectedBucket);
+          if (acct) formData.append('account', acct);
+          formData.append('path', filePath);
+          formData.append('file', file);
+
+          const response = await fetch('/api/storage/upload', {
+            method: 'POST',
+            body: formData,
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            setUploadProgress(prev => prev.map((p, idx) => idx === i ? { ...p, status: 'error' as const } : p));
+            setError(data.error || `Gagal upload file: ${file.name}`);
+            console.error(`Error uploading ${file.name}:`, data.error);
           } else {
-            setUploadProgress(prev => prev.map((p, idx) => 
-              idx === i ? { ...p, status: 'success' as const } : p
-            ));
+            setUploadProgress(prev => prev.map((p, idx) => idx === i ? { ...p, status: 'success' as const } : p));
           }
         } catch (err) {
-          setUploadProgress(prev => prev.map((p, idx) => 
-            idx === i ? { ...p, status: 'error' as const } : p
-          ));
+          setUploadProgress(prev => prev.map((p, idx) => idx === i ? { ...p, status: 'error' as const } : p));
+          setError(`Gagal upload file: ${file.name}`);
           console.error(`Error uploading ${file.name}:`, err);
         }
       }
 
       const successCount = uploadProgress.filter(p => p.status === 'success').length;
       alert(`Upload selesai! ${successCount} dari ${uploadFiles.length} file berhasil diupload.`);
-      
-      // Reset after all uploads
       setTimeout(() => {
         setUploadFiles([]);
         setUploadProgress([]);
         fetchFiles(selectedBucket, currentPath);
-        
-        // Reset file input
         const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
         if (fileInput) fileInput.value = '';
       }, 2000);

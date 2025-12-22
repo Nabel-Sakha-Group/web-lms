@@ -1,33 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClientForBucket } from '@/lib/supabase-multi';
 
 export async function GET(request: NextRequest) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    // ...existing code...
 
-    if (!supabaseUrl || !supabaseServiceKey) {
+    const searchParams = request.nextUrl.searchParams;
+    const bucketName = searchParams.get('bucket');
+    const account = searchParams.get('account');
+    const path = searchParams.get('path') || '';
+
+    // If account is provided, use it to select the Supabase client and bucket
+    let resolvedBucket = bucketName || null;
+    let supabase = null as any;
+    if (account) {
+      const envKey = account.toUpperCase();
+      resolvedBucket = `${envKey}-LMS`;
+      supabase = getSupabaseClientForBucket(resolvedBucket, false);
+    } else if (bucketName) {
+      // Try to infer account from bucket name
+      supabase = getSupabaseClientForBucket(bucketName, false);
+      resolvedBucket = bucketName;
+    }
+
+    if (!resolvedBucket || !supabase) {
       return NextResponse.json(
-        { error: 'Supabase configuration missing' },
+        { error: 'Supabase configuration missing for this bucket/account' },
         { status: 500 }
       );
     }
 
-    const searchParams = request.nextUrl.searchParams;
-    const bucketName = searchParams.get('bucket');
-    const path = searchParams.get('path') || '';
-
-    if (!bucketName) {
-      return NextResponse.json(
-        { error: 'Bucket name is required' },
-        { status: 400 }
-      );
-    }
-
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-    const { data: files, error } = await supabaseAdmin.storage
-      .from(bucketName)
+    const { data: files, error } = await supabase.storage
+      .from(resolvedBucket)
       .list(path, {
         limit: 1000,
         sortBy: { column: 'name', order: 'asc' },
