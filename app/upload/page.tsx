@@ -268,6 +268,10 @@ export default function UploadPage() {
 
     try {
       setLoadingFiles(true);
+      // Determine account for this bucket (if any)
+      const bucketObj = buckets.find(b => b.name === selectedBucket || b.id === selectedBucket);
+      const acct = bucketObj && '_account' in bucketObj ? (bucketObj as { _account?: string })._account || null : null;
+
       const response = await fetch('/api/storage/delete', {
         method: 'POST',
         headers: {
@@ -275,6 +279,7 @@ export default function UploadPage() {
         },
         body: JSON.stringify({
           bucket: selectedBucket,
+          account: acct,
           path: targetPath,
           type: isFolder ? 'folder' : 'file',
         }),

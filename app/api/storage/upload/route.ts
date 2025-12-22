@@ -42,18 +42,35 @@ export async function POST(request: NextRequest) {
     } else {
       uploadPath = '';
     }
-    // Supabase upload expects File/Blob, not ArrayBuffer
+    // Supabase upload expects File/Blob, not ArrayBuffer. Normalize path.
     let uploadFile: Blob;
     if (typeof file === 'object' && file !== null && 'arrayBuffer' in file && 'type' in file) {
       uploadFile = file as Blob;
     } else {
       return NextResponse.json({ error: 'Invalid file type' }, { status: 400 });
     }
+
+    // Normalize uploadPath: remove leading slashes
+    uploadPath = String(uploadPath || '').replace(/^\/+/, '');
+
+    // Log details to help debugging folder uploads
+    try {
+      const fileSize = typeof (uploadFile as any).size === 'number' ? (uploadFile as any).size : undefined;
+      const fileType = (uploadFile as any).type || 'unknown';
+      console.log(`[UPLOAD] bucket=${resolvedBucket} account=${accountStr || 'N/A'} path=${uploadPath || '(root)'} type=${fileType} size=${fileSize ?? 'unknown'}`);
+    } catch (e) {
+      console.log('[UPLOAD] unable to read file meta', e);
+    }
+
     const { error } = await supabase.storage.from(resolvedBucket).upload(uploadPath, uploadFile, {
       cacheControl: '3600',
       upsert: false,
       contentType: (uploadFile as Blob).type || 'application/octet-stream',
     });
+
+    if (error) {
+      console.error('[UPLOAD] Supabase error:', error);
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
