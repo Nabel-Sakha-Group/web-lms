@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -44,6 +44,25 @@ export default function UploadPage() {
   const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
   const [bucketUsage, setBucketUsage] = useState<{ usedBytes: number; totalBytes: number } | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(false);
+  const [bucketUsages, setBucketUsages] = useState<Record<string, { usedBytes: number; totalBytes: number; source?: string; incomplete?: boolean } | null>>({});
+
+  const sortedBuckets = useMemo(() => {
+    return [...buckets].sort((a, b) => {
+      const au = bucketUsages[a.name]?.usedBytes ?? 0;
+      const bu = bucketUsages[b.name]?.usedBytes ?? 0;
+      return bu - au;
+    });
+  }, [buckets, bucketUsages]);
+
+  const formatMB = (bytes: number | undefined | null) => {
+    if (!bytes && bytes !== 0) return '--';
+    return (bytes! / 1024 / 1024).toFixed(2) + ' MB';
+  };
+
+  const formatPercent = (used?: number | null, total?: number | null) => {
+    if (used == null || total == null || total === 0) return '--%';
+    return `${Math.min(100, (used / total) * 100).toFixed(1)}%`;
+  };
 
   // Check authentication on page load
   useEffect(() => {
@@ -159,6 +178,26 @@ export default function UploadPage() {
       }
       if (data.buckets) {
         setBuckets(data.buckets);
+        // Fetch usage for each bucket in the background
+          try {
+          const usagePromises = data.buckets.map(async (b: Bucket) => {
+            try {
+              const res = await fetch(`/api/storage/usage?bucket=${encodeURIComponent(b.name)}`);
+              const json = await res.json();
+              if (!res.ok) return { name: b.name, usage: null };
+              return { name: b.name, usage: { usedBytes: json.usedBytes, totalBytes: json.totalBytes, source: json.source, incomplete: json.incomplete } };
+            } catch (e) {
+              return { name: b.name, usage: null };
+            }
+          });
+          const all = await Promise.all(usagePromises);
+          const usageMap: Record<string, { usedBytes: number; totalBytes: number } | null> = {};
+          all.forEach((r) => { usageMap[r.name] = r.usage; });
+          console.debug('Fetched per-bucket usage:', usageMap);
+          setBucketUsages(prev => ({ ...prev, ...usageMap }));
+        } catch (e) {
+          console.warn('Error fetching per-bucket usages', e);
+        }
       }
     } catch (err) {
       console.error("Error:", err);
@@ -233,6 +272,8 @@ export default function UploadPage() {
         return;
       }
       setBucketUsage({ usedBytes: data.usedBytes, totalBytes: data.totalBytes });
+      // Update per-bucket cache as well
+      setBucketUsages(prev => ({ ...prev, [bucketName]: { usedBytes: data.usedBytes, totalBytes: data.totalBytes } }));
     } catch (err) {
       console.error('Error fetching usage:', err);
     } finally {
@@ -469,7 +510,7 @@ export default function UploadPage() {
               </div>
             ) : (
               <div className="space-y-2 max-h-[500px] overflow-y-auto">
-                {buckets.map((bucket) => (
+                {sortedBuckets.map((bucket) => (
                   <button
                     key={bucket.id}
                     onClick={() => handleBucketSelect(bucket.name)}
@@ -483,8 +524,19 @@ export default function UploadPage() {
                       <span className="text-2xl">🗂️</span>
                       <div className="flex-1">
                         <div className="font-medium text-lg">{bucket.name}</div>
-                        <div className="text-xs opacity-70">
-                          {bucket.public ? '🌐 Public' : '🔒 Private'}
+                        <div className="flex items-center gap-2 text-xs opacity-70">
+                          <span>{bucket.public ? '🌐 Public' : '🔒 Private'}</span>
+                          <span className="text-[11px] text-gray-400">•</span>
+                          <span className="text-[11px] text-gray-400">
+                            {bucketUsages[bucket.name]
+                              ? `${formatMB(bucketUsages[bucket.name]?.usedBytes)} (${formatPercent(bucketUsages[bucket.name]?.usedBytes, bucketUsages[bucket.name]?.totalBytes)})`
+                              : 'usage: --'}
+                          </span>
+                          {bucketUsages[bucket.name] && (
+                            <span className="ml-2 text-[11px]" title={`source: ${bucketUsages[bucket.name]?.source || 'unknown'}${bucketUsages[bucket.name]?.incomplete ? ' (incomplete)' : ''}`}>
+                              <span className={`inline-block w-2 h-2 rounded-full ${bucketUsages[bucket.name]?.source === 'service' ? 'bg-yellow-400' : 'bg-green-400'}`} />
+                            </span>
+                          )}
                         </div>
                       </div>
                       {selectedBucket === bucket.name && (
@@ -532,38 +584,44 @@ export default function UploadPage() {
 
                 {/* Bucket usage progress */}
                 <div className="bg-slate-800 rounded-md p-3">
-                  {bucketUsage ? (
-                    <>
-                      <div className="flex items-center justify-between text-xs text-gray-300 mb-1">
-                        <span>
-                          Used: {(bucketUsage.usedBytes / 1024 / 1024).toFixed(2)} MB
-                        </span>
-                        <span>
-                          Total: {(bucketUsage.totalBytes / 1024 / 1024).toFixed(2)} MB
-                        </span>
+                  {(() => {
+                    const selectedUsage = bucketUsages[selectedBucket] ?? bucketUsage;
+                    if (selectedUsage) {
+                      return (
+                        <>
+                          <div className="flex items-center justify-between text-xs text-gray-300 mb-1">
+                            <span>
+                              Used: {(selectedUsage.usedBytes / 1024 / 1024).toFixed(2)} MB
+                            </span>
+                            <span>
+                              Total: {(selectedUsage.totalBytes / 1024 / 1024).toFixed(2)} MB
+                            </span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500"
+                              style={{
+                                width: `${Math.min(
+                                  100,
+                                  (selectedUsage.usedBytes / Math.max(selectedUsage.totalBytes, 1)) * 100
+                                ).toFixed(1)}%`,
+                              }}
+                            />
+                          </div>
+                          <div className="text-[10px] text-gray-500 mt-1">
+                            {`Approx. ${(selectedUsage.usedBytes / Math.max(selectedUsage.totalBytes, 1) * 100).toFixed(1)}% used`}
+                          </div>
+                        </>
+                      );
+                    }
+                    return (
+                      <div className="text-xs text-gray-500">
+                        {loadingUsage
+                          ? 'Calculating bucket usage...'
+                          : 'Select a bucket to see usage'}
                       </div>
-                      <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500"
-                          style={{
-                            width: `${Math.min(
-                              100,
-                              (bucketUsage.usedBytes / Math.max(bucketUsage.totalBytes, 1)) * 100
-                            ).toFixed(1)}%`,
-                          }}
-                        />
-                      </div>
-                      <div className="text-[10px] text-gray-500 mt-1">
-                        {`Approx. ${(bucketUsage.usedBytes / Math.max(bucketUsage.totalBytes, 1) * 100).toFixed(1)}% used`}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-xs text-gray-500">
-                      {loadingUsage
-                        ? 'Calculating bucket usage...'
-                        : 'Select a bucket to see usage'}
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             )}
